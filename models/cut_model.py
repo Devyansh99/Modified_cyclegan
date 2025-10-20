@@ -192,7 +192,17 @@ class CUTModel(BaseModel):
         else:
             loss_NCE_both = self.loss_NCE
 
-        self.loss_G = self.loss_G_GAN + loss_NCE_both
+        # Add OCR loss if available
+        if hasattr(self, 'ocr_criterion') and self.ocr_criterion is not None:
+            try:
+                self.loss_OCR = self.ocr_criterion(self.fake_B, self.real_A.detach())
+            except Exception as e:
+                print(f"Warning: OCR loss computation failed: {e}")
+                self.loss_OCR = 0.0
+        else:
+            self.loss_OCR = 0.0
+
+        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_OCR
         return self.loss_G
 
     def calculate_NCE_loss(self, src, tgt):

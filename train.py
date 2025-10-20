@@ -20,9 +20,12 @@ if __name__ == '__main__':
     if ocr_loss_weight > 0:
         device = torch.device('cuda:{}'.format(opt.gpu_ids[0])) if opt.gpu_ids else torch.device('cpu')
         ocr_criterion = OCRLoss(device=device, weight=ocr_loss_weight)
+        # Attach OCR criterion to model so it can be used in compute_G_loss
+        model.ocr_criterion = ocr_criterion
+        model.loss_names.append('OCR')
         print(f'OCR Loss enabled with weight: {ocr_loss_weight}')
     else:
-        ocr_criterion = None
+        model.ocr_criterion = None
         print('OCR Loss disabled')
 
     visualizer = Visualizer(opt)   # create a visualizer that display/save images and plots
@@ -55,36 +58,6 @@ if __name__ == '__main__':
                 model.setup(opt)               # regular setup: load and print networks; create schedulers
                 model.parallelize()
             model.set_input(data)  # unpack data from dataset and apply preprocessing
-            
-            # Compute and apply OCR loss before optimize_parameters if enabled
-            if ocr_criterion is not None:
-                try:
-                    # First, run forward pass to get fake_B
-                    if not hasattr(model, 'fake_B'):
-                        model.forward()
-                    
-                    fake_B = model.fake_B if hasattr(model, 'fake_B') else None
-                    real_A = model.real_A if hasattr(model, 'real_A') else None
-                    
-                    if fake_B is not None and real_A is not None:
-                        # Compute OCR loss (fake_B keeps gradients, real_A is detached)
-                        ocr_loss = ocr_criterion(fake_B, real_A.detach())
-                        
-                        # Add OCR loss to model's loss_names if not already present
-                        if 'OCR' not in model.loss_names:
-                            model.loss_names.append('OCR')
-                        
-                        # Store OCR loss value for logging
-                        model.loss_OCR = ocr_loss.item()
-                        
-                        # Backpropagate OCR loss through generator
-                        model.set_requires_grad(model.netG, True)
-                        model.optimizer_G.zero_grad()
-                        ocr_loss.backward(retain_graph=True)
-                        model.optimizer_G.step()
-                except Exception as e:
-                    print(f"Warning: OCR loss computation failed: {e}")
-            
             model.optimize_parameters()   # calculate loss functions, get gradients, update network weights
             
             if len(opt.gpu_ids) > 0:
@@ -98,9 +71,6 @@ if __name__ == '__main__':
 
             if total_iters % opt.print_freq == 0:    # print training losses and save logging information to the disk
                 losses = model.get_current_losses()
-                # Add OCR loss to logging if it exists
-                if hasattr(model, 'loss_OCR'):
-                    losses['OCR'] = model.loss_OCR
                 visualizer.print_current_losses(epoch, epoch_iter, losses, optimize_time, t_data)
                 if opt.display_id is None or opt.display_id > 0:
                     visualizer.plot_current_losses(epoch, float(epoch_iter) / dataset_size, losses)
