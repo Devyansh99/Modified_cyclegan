@@ -15,9 +15,16 @@ class PatchNCELoss(nn.Module):
         dim = feat_q.shape[1]
         feat_k = feat_k.detach()
 
-        # Normalize features for high-resolution stability
-        feat_q = torch.nn.functional.normalize(feat_q, dim=1)
-        feat_k = torch.nn.functional.normalize(feat_k, dim=1)
+        # CRITICAL: L2 normalize features to prevent extreme dot products at high resolution
+        # This makes similarity scores bounded to [-1, 1]
+        feat_q = torch.nn.functional.normalize(feat_q, p=2, dim=1)
+        feat_k = torch.nn.functional.normalize(feat_k, p=2, dim=1)
+
+        # Check for NaN after normalization
+        if torch.isnan(feat_q).any() or torch.isnan(feat_k).any():
+            print("WARNING: NaN detected in NCE features after normalization")
+            # Return zero loss if features are invalid
+            return torch.zeros(num_patches, device=feat_q.device)
 
         # pos logit
         l_pos = torch.bmm(
@@ -53,10 +60,21 @@ class PatchNCELoss(nn.Module):
 
         out = torch.cat((l_pos, l_neg), dim=1) / self.opt.nce_T
 
-        # Clamp to prevent overflow in softmax
-        out = torch.clamp(out, min=-50, max=50)
+        # CRITICAL: Clamp logits to prevent exp() overflow in cross-entropy
+        # At high resolution, even normalized features can produce extreme logits when divided by small temperature
+        out = torch.clamp(out, min=-20.0, max=20.0)
+        
+        # Check for NaN/Inf before loss computation
+        if torch.isnan(out).any() or torch.isinf(out).any():
+            print("WARNING: NaN/Inf detected in NCE logits")
+            return torch.zeros(num_patches, device=feat_q.device)
 
         loss = self.cross_entropy_loss(out, torch.zeros(out.size(0), dtype=torch.long,
                                                         device=feat_q.device))
+        
+        # Final safety check
+        if torch.isnan(loss).any() or torch.isinf(loss).any():
+            print("WARNING: NaN/Inf detected in final NCE loss")
+            return torch.zeros(num_patches, device=feat_q.device)
 
         return loss

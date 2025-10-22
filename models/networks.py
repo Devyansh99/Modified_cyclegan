@@ -558,6 +558,13 @@ class PatchSampleF(nn.Module):
         for feat_id, feat in enumerate(feats):
             B, H, W = feat.shape[0], feat.shape[2], feat.shape[3]
             feat_reshape = feat.permute(0, 2, 3, 1).flatten(1, 2)
+            
+            # Check for NaN in input features (critical for high-res)
+            if torch.isnan(feat_reshape).any() or torch.isinf(feat_reshape).any():
+                print(f"WARNING: NaN/Inf detected in feature layer {feat_id} before sampling")
+                # Skip this feature or return zeros
+                continue
+            
             if num_patches > 0:
                 if patch_ids is not None:
                     patch_id = patch_ids[feat_id]
@@ -571,11 +578,24 @@ class PatchSampleF(nn.Module):
             else:
                 x_sample = feat_reshape
                 patch_id = []
+            
             if self.use_mlp:
                 mlp = getattr(self, 'mlp_%d' % feat_id)
                 x_sample = mlp(x_sample)
+                
+                # Check for NaN after MLP (high-res can cause explosion in linear layers)
+                if torch.isnan(x_sample).any() or torch.isinf(x_sample).any():
+                    print(f"WARNING: NaN/Inf detected after MLP in layer {feat_id}")
+                    # Clamp to prevent propagation
+                    x_sample = torch.clamp(x_sample, min=-100, max=100)
+            
             return_ids.append(patch_id)
             x_sample = self.l2norm(x_sample)
+            
+            # Final check after normalization
+            if torch.isnan(x_sample).any() or torch.isinf(x_sample).any():
+                print(f"WARNING: NaN/Inf detected after L2 norm in layer {feat_id}")
+                continue
 
             if num_patches == 0:
                 x_sample = x_sample.permute(0, 2, 1).reshape([B, x_sample.shape[-1], H, W])
