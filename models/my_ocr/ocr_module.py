@@ -59,12 +59,15 @@ class OCRLoss(nn.Module):
     OCR Loss: Measures text preservation using a hybrid approach
     - Uses perceptual loss on downsampled images (more stable for large images)
     - Normalized to prevent gradient explosion
+    - Includes warmup phase to prevent early training collapse
     """
-    def __init__(self, device='cuda', weight=1.0):
+    def __init__(self, device='cuda', weight=1.0, warmup_iters=100):
         super(OCRLoss, self).__init__()
         self.ocr_model = SimpleOCR(device=device)
         self.weight = weight
         self.device = device
+        self.warmup_iters = warmup_iters
+        self.current_iter = 0
         # Use smooth L1 loss (more stable than L1)
         self.loss_fn = nn.SmoothL1Loss()
     
@@ -72,6 +75,7 @@ class OCRLoss(nn.Module):
         """
         Compute OCR loss between fake and real images
         Uses smooth L1 loss with normalization for stability
+        Includes warmup phase to prevent early collapse
         
         Args:
             fake_image: generated image tensor (B, C, H, W) - has gradients
@@ -92,7 +96,15 @@ class OCRLoss(nn.Module):
         # Use smooth L1 loss (less sensitive to outliers, more stable)
         content_loss = self.loss_fn(fake_small, real_small)
         
-        # Apply weight with gradient clipping for safety
-        weighted_loss = torch.clamp(content_loss * self.weight, max=10.0)
+        # Apply warmup: gradually increase OCR loss weight from 0 to target weight
+        # This prevents early training collapse when generator output is random
+        self.current_iter += 1
+        if self.current_iter < self.warmup_iters:
+            warmup_factor = self.current_iter / self.warmup_iters
+        else:
+            warmup_factor = 1.0
+        
+        # Apply weight with warmup and gradient clipping for safety
+        weighted_loss = torch.clamp(content_loss * self.weight * warmup_factor, max=10.0)
         
         return weighted_loss

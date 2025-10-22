@@ -16,14 +16,14 @@ if __name__ == '__main__':
     print('The number of training images = %d' % dataset_size)
 
     # Initialize OCR Loss (set weight=0 to disable, weight>0 to enable)
-    ocr_loss_weight = getattr(opt, 'lambda_OCR', 0.1)  # Default weight 0.1
+    ocr_loss_weight = getattr(opt, 'lambda_OCR', 0.0)  # Default weight 0.0 (disabled)
     if ocr_loss_weight > 0:
         device = torch.device('cuda:{}'.format(opt.gpu_ids[0])) if opt.gpu_ids else torch.device('cpu')
-        ocr_criterion = OCRLoss(device=device, weight=ocr_loss_weight)
+        ocr_criterion = OCRLoss(device=device, weight=ocr_loss_weight, warmup_iters=100)
         # Attach OCR criterion to model so it can be used in compute_G_loss
         model.ocr_criterion = ocr_criterion
         model.loss_names.append('OCR')
-        print(f'OCR Loss enabled with weight: {ocr_loss_weight}')
+        print(f'OCR Loss enabled with weight: {ocr_loss_weight}, warmup: 100 iters')
     else:
         model.ocr_criterion = None
         print('OCR Loss disabled')
