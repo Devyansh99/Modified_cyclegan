@@ -15,6 +15,10 @@ class PatchNCELoss(nn.Module):
         dim = feat_q.shape[1]
         feat_k = feat_k.detach()
 
+        # Normalize features for high-resolution stability
+        feat_q = torch.nn.functional.normalize(feat_q, dim=1)
+        feat_k = torch.nn.functional.normalize(feat_k, dim=1)
+
         # pos logit
         l_pos = torch.bmm(
             feat_q.view(num_patches, 1, -1), feat_k.view(num_patches, -1, 1))
@@ -48,6 +52,9 @@ class PatchNCELoss(nn.Module):
         l_neg = l_neg_curbatch.view(-1, npatches)
 
         out = torch.cat((l_pos, l_neg), dim=1) / self.opt.nce_T
+
+        # Clamp to prevent overflow in softmax
+        out = torch.clamp(out, min=-50, max=50)
 
         loss = self.cross_entropy_loss(out, torch.zeros(out.size(0), dtype=torch.long,
                                                         device=feat_q.device))
