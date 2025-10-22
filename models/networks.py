@@ -582,7 +582,14 @@ class PatchSampleF(nn.Module):
             
             if self.use_mlp:
                 # Normalize features BEFORE MLP to prevent explosion at high-res
-                x_sample = torch.nn.functional.normalize(x_sample, p=2, dim=1)
+                # Add epsilon to prevent division by zero
+                x_sample_norm = torch.norm(x_sample, p=2, dim=1, keepdim=True)
+                x_sample = x_sample / (x_sample_norm + 1e-8)
+                
+                # Check if normalization produced NaN
+                if torch.isnan(x_sample).any() or torch.isinf(x_sample).any():
+                    print(f"WARNING: NaN/Inf after pre-normalization in layer {feat_id}")
+                    x_sample = torch.nan_to_num(x_sample, nan=0.0, posinf=1.0, neginf=-1.0)
                 
                 mlp = getattr(self, 'mlp_%d' % feat_id)
                 x_sample = mlp(x_sample)
@@ -590,16 +597,16 @@ class PatchSampleF(nn.Module):
                 # Check for NaN after MLP (high-res can cause explosion in linear layers)
                 if torch.isnan(x_sample).any() or torch.isinf(x_sample).any():
                     print(f"WARNING: NaN/Inf detected after MLP in layer {feat_id}")
-                    # Clamp to prevent propagation
-                    x_sample = torch.clamp(x_sample, min=-100, max=100)
+                    # Replace NaN with zeros
+                    x_sample = torch.nan_to_num(x_sample, nan=0.0, posinf=100.0, neginf=-100.0)
             
             return_ids.append(patch_id)
             x_sample = self.l2norm(x_sample)
             
-            # Final check after normalization
+            # Final check after normalization - replace NaN instead of skipping
             if torch.isnan(x_sample).any() or torch.isinf(x_sample).any():
-                print(f"WARNING: NaN/Inf detected after L2 norm in layer {feat_id}")
-                continue
+                print(f"WARNING: NaN/Inf detected after L2 norm in layer {feat_id}, replacing with zeros")
+                x_sample = torch.nan_to_num(x_sample, nan=0.0, posinf=1.0, neginf=-1.0)
 
             if num_patches == 0:
                 x_sample = x_sample.permute(0, 2, 1).reshape([B, x_sample.shape[-1], H, W])
