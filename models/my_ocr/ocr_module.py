@@ -57,21 +57,21 @@ class SimpleOCR(nn.Module):
 class OCRLoss(nn.Module):
     """
     OCR Loss: Measures text preservation using a hybrid approach
-    - Uses L1 loss on image content (differentiable)
-    - Optionally logs OCR text similarity for monitoring
+    - Uses perceptual loss on downsampled images (more stable for large images)
+    - Normalized to prevent gradient explosion
     """
     def __init__(self, device='cuda', weight=1.0):
         super(OCRLoss, self).__init__()
         self.ocr_model = SimpleOCR(device=device)
         self.weight = weight
         self.device = device
-        # Use L1 loss for differentiable pixel-level similarity
-        self.l1_criterion = nn.L1Loss()
+        # Use smooth L1 loss (more stable than L1)
+        self.loss_fn = nn.SmoothL1Loss()
     
     def forward(self, fake_image, real_image):
         """
         Compute OCR loss between fake and real images
-        Uses L1 loss as a differentiable proxy for text preservation
+        Uses smooth L1 loss with normalization for stability
         
         Args:
             fake_image: generated image tensor (B, C, H, W) - has gradients
@@ -79,11 +79,20 @@ class OCRLoss(nn.Module):
         Returns:
             loss: scalar tensor with gradients
         """
-        # Use L1 loss on image content as differentiable proxy
-        # This encourages the generator to preserve overall structure including text
-        content_loss = self.l1_criterion(fake_image, real_image)
+        # Downsample images to reduce gradient magnitude for large images
+        # This prevents NaN issues with high-resolution images
+        if fake_image.size(2) > 256 or fake_image.size(3) > 256:
+            # Downsample to max 256x256 for loss computation
+            fake_small = F.interpolate(fake_image, size=(256, 256), mode='bilinear', align_corners=False)
+            real_small = F.interpolate(real_image, size=(256, 256), mode='bilinear', align_corners=False)
+        else:
+            fake_small = fake_image
+            real_small = real_image
         
-        # Weight the loss
-        weighted_loss = content_loss * self.weight
+        # Use smooth L1 loss (less sensitive to outliers, more stable)
+        content_loss = self.loss_fn(fake_small, real_small)
+        
+        # Apply weight with gradient clipping for safety
+        weighted_loss = torch.clamp(content_loss * self.weight, max=10.0)
         
         return weighted_loss

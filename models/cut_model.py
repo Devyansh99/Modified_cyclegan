@@ -119,6 +119,8 @@ class CUTModel(BaseModel):
         self.optimizer_D.zero_grad()
         self.loss_D = self.compute_D_loss()
         self.loss_D.backward()
+        # Clip gradients to prevent explosion
+        torch.nn.utils.clip_grad_norm_(self.netD.parameters(), max_norm=1.0)
         self.optimizer_D.step()
 
         # update G
@@ -128,6 +130,10 @@ class CUTModel(BaseModel):
             self.optimizer_F.zero_grad()
         self.loss_G = self.compute_G_loss()
         self.loss_G.backward()
+        # Clip gradients to prevent explosion
+        torch.nn.utils.clip_grad_norm_(self.netG.parameters(), max_norm=1.0)
+        if self.opt.netF == 'mlp_sample':
+            torch.nn.utils.clip_grad_norm_(self.netF.parameters(), max_norm=1.0)
         self.optimizer_G.step()
         if self.opt.netF == 'mlp_sample':
             self.optimizer_F.step()
