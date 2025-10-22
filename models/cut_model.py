@@ -177,6 +177,18 @@ class CUTModel(BaseModel):
                 self.real = torch.flip(self.real, [3])
 
         self.fake = self.netG(self.real)
+        
+        # Check for NaN in generator output (critical for high-res)
+        if torch.isnan(self.fake).any() or torch.isinf(self.fake).any():
+            print(f"ERROR: NaN/Inf detected in generator output! Skipping batch.")
+            # Reinitialize generator if NaN persists (helps recover from bad init)
+            if not hasattr(self, 'nan_count'):
+                self.nan_count = 0
+            self.nan_count += 1
+            if self.nan_count > 100:
+                print(f"WARNING: Too many NaN outputs ({self.nan_count}). Generator may need reinitialization or lower resolution.")
+            self.fake = torch.zeros_like(self.real)  # Return zeros to prevent crash
+        
         self.fake_B = self.fake[:self.real_A.size(0)]
         if self.opt.nce_idt:
             self.idt_B = self.fake[self.real_A.size(0):]

@@ -265,6 +265,12 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
         net = G_Resnet(input_nc, output_nc, opt.nz, num_downs=2, n_res=n_blocks - 4, ngf=ngf, norm='inst', nl_layer='relu')
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
+    
+    # Reduce init_gain for high-resolution stability (crop_size > 256)
+    if opt and hasattr(opt, 'crop_size') and opt.crop_size > 256:
+        init_gain = min(init_gain, 0.005)  # Much smaller init for high-res
+        print(f"High-resolution detected (crop_size={opt.crop_size}), reducing init_gain to {init_gain}")
+    
     return init_net(net, init_type, init_gain, gpu_ids, initialize_weights=('stylegan2' not in netG))
 
 
@@ -1024,6 +1030,9 @@ class ResnetGenerator(nn.Module):
             for layer_id, layer in enumerate(self.model):
                 # print(layer_id, layer)
                 feat = layer(feat)
+                # Clamp intermediate features to prevent explosion at high-res
+                if layer_id < len(self.model) - 1:  # Don't clamp final tanh output
+                    feat = torch.clamp(feat, min=-50, max=50)
                 if layer_id in layers:
                     # print("%d: adding the output of %s %d" % (layer_id, layer.__class__.__name__, feat.size(1)))
                     feats.append(feat)
