@@ -19,11 +19,12 @@ if __name__ == '__main__':
     ocr_loss_weight = getattr(opt, 'lambda_OCR', 0.0)  # Default weight 0.0 (disabled)
     if ocr_loss_weight > 0:
         device = torch.device('cuda:{}'.format(opt.gpu_ids[0])) if opt.gpu_ids else torch.device('cpu')
-        ocr_criterion = OCRLoss(device=device, weight=ocr_loss_weight, warmup_iters=100)
+        # Use 200 iteration warmup for high-resolution stability
+        ocr_criterion = OCRLoss(device=device, weight=ocr_loss_weight, warmup_iters=200)
         # Attach OCR criterion to model so it can be used in compute_G_loss
         model.ocr_criterion = ocr_criterion
         model.loss_names.append('OCR')
-        print(f'OCR Loss enabled with weight: {ocr_loss_weight}, warmup: 100 iters')
+        print(f'OCR Loss enabled with weight: {ocr_loss_weight}, warmup: 200 iters (quadratic)')
     else:
         model.ocr_criterion = None
         print('OCR Loss disabled')

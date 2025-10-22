@@ -57,11 +57,11 @@ class SimpleOCR(nn.Module):
 class OCRLoss(nn.Module):
     """
     OCR Loss: Measures text preservation using a hybrid approach
-    - Uses perceptual loss on downsampled images (more stable for large images)
-    - Normalized to prevent gradient explosion
-    - Includes warmup phase to prevent early training collapse
+    - Uses perceptual loss on heavily downsampled images (critical for high-res stability)
+    - Includes aggressive normalization and warmup
+    - Designed for 2048x512 images
     """
-    def __init__(self, device='cuda', weight=1.0, warmup_iters=100):
+    def __init__(self, device='cuda', weight=1.0, warmup_iters=200):
         super(OCRLoss, self).__init__()
         self.ocr_model = SimpleOCR(device=device)
         self.weight = weight
@@ -73,9 +73,7 @@ class OCRLoss(nn.Module):
     
     def forward(self, fake_image, real_image):
         """
-        Compute OCR loss between fake and real images
-        Uses smooth L1 loss with normalization for stability
-        Includes warmup phase to prevent early collapse
+        Compute OCR loss with extreme stability for high-resolution images
         
         Args:
             fake_image: generated image tensor (B, C, H, W) - has gradients
@@ -83,28 +81,49 @@ class OCRLoss(nn.Module):
         Returns:
             loss: scalar tensor with gradients
         """
-        # Downsample images to reduce gradient magnitude for large images
-        # This prevents NaN issues with high-resolution images
-        if fake_image.size(2) > 256 or fake_image.size(3) > 256:
-            # Downsample to max 256x256 for loss computation
-            fake_small = F.interpolate(fake_image, size=(256, 256), mode='bilinear', align_corners=False)
-            real_small = F.interpolate(real_image, size=(256, 256), mode='bilinear', align_corners=False)
-        else:
-            fake_small = fake_image
-            real_small = real_image
-        
-        # Use smooth L1 loss (less sensitive to outliers, more stable)
-        content_loss = self.loss_fn(fake_small, real_small)
-        
-        # Apply warmup: gradually increase OCR loss weight from 0 to target weight
-        # This prevents early training collapse when generator output is random
-        self.current_iter += 1
-        if self.current_iter < self.warmup_iters:
-            warmup_factor = self.current_iter / self.warmup_iters
-        else:
-            warmup_factor = 1.0
-        
-        # Apply weight with warmup and gradient clipping for safety
-        weighted_loss = torch.clamp(content_loss * self.weight * warmup_factor, max=10.0)
-        
-        return weighted_loss
+        try:
+            # Safety check for NaN/Inf in inputs
+            if torch.isnan(fake_image).any() or torch.isinf(fake_image).any():
+                print("WARNING: NaN/Inf in fake_image input to OCR loss")
+                return torch.tensor(0.0, device=fake_image.device, requires_grad=True)
+            
+            if torch.isnan(real_image).any() or torch.isinf(real_image).any():
+                print("WARNING: NaN/Inf in real_image input to OCR loss")
+                return torch.tensor(0.0, device=fake_image.device, requires_grad=True)
+            
+            # CRITICAL: Downsample to 128x128 for ultra-high-resolution images
+            # This massively reduces gradient magnitude
+            target_size = (128, 128) if (fake_image.size(2) > 512 or fake_image.size(3) > 512) else (256, 256)
+            
+            fake_small = F.interpolate(fake_image, size=target_size, mode='bilinear', align_corners=False)
+            real_small = F.interpolate(real_image, size=target_size, mode='bilinear', align_corners=False)
+            
+            # Use smooth L1 loss
+            content_loss = self.loss_fn(fake_small, real_small)
+            
+            # Safety check
+            if torch.isnan(content_loss) or torch.isinf(content_loss):
+                print("WARNING: NaN/Inf in OCR content_loss")
+                return torch.tensor(0.0, device=fake_image.device, requires_grad=True)
+            
+            # Warmup: start at 0, gradually increase to full weight
+            self.current_iter += 1
+            if self.current_iter <= self.warmup_iters:
+                # Slower warmup for high-resolution stability
+                warmup_factor = (self.current_iter / self.warmup_iters) ** 2  # quadratic warmup
+            else:
+                warmup_factor = 1.0
+            
+            # Very aggressive clamping for high-resolution: max loss = 1.0
+            weighted_loss = torch.clamp(content_loss * self.weight * warmup_factor, max=1.0)
+            
+            # Final safety check
+            if torch.isnan(weighted_loss) or torch.isinf(weighted_loss):
+                print("WARNING: NaN/Inf in final OCR loss")
+                return torch.tensor(0.0, device=fake_image.device, requires_grad=True)
+            
+            return weighted_loss
+            
+        except Exception as e:
+            print(f"ERROR in OCR loss computation: {e}")
+            return torch.tensor(0.0, device=fake_image.device, requires_grad=True)

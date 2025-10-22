@@ -114,13 +114,24 @@ class CUTModel(BaseModel):
         # forward
         self.forward()
 
+        # Check for NaN in forward pass outputs (critical for high-res)
+        if torch.isnan(self.fake_B).any() or torch.isinf(self.fake_B).any():
+            print("ERROR: NaN/Inf detected in generator output! Skipping batch.")
+            return
+
         # update D
         self.set_requires_grad(self.netD, True)
         self.optimizer_D.zero_grad()
         self.loss_D = self.compute_D_loss()
+        
+        # Check D loss before backward
+        if torch.isnan(self.loss_D) or torch.isinf(self.loss_D):
+            print(f"ERROR: NaN/Inf in D loss (D_real={self.loss_D_real:.4f}, D_fake={self.loss_D_fake:.4f})")
+            return
+            
         self.loss_D.backward()
-        # Clip gradients to prevent explosion
-        torch.nn.utils.clip_grad_norm_(self.netD.parameters(), max_norm=1.0)
+        # Very aggressive gradient clipping for high-resolution stability
+        torch.nn.utils.clip_grad_norm_(self.netD.parameters(), max_norm=0.1)
         self.optimizer_D.step()
 
         # update G
@@ -129,11 +140,19 @@ class CUTModel(BaseModel):
         if self.opt.netF == 'mlp_sample':
             self.optimizer_F.zero_grad()
         self.loss_G = self.compute_G_loss()
+        
+        # Check G loss before backward
+        if torch.isnan(self.loss_G) or torch.isinf(self.loss_G):
+            print(f"ERROR: NaN/Inf in G loss (GAN={self.loss_G_GAN:.4f}, NCE={self.loss_NCE:.4f})")
+            if hasattr(self, 'loss_OCR'):
+                print(f"  OCR={self.loss_OCR:.4f}")
+            return
+            
         self.loss_G.backward()
-        # Clip gradients to prevent explosion
-        torch.nn.utils.clip_grad_norm_(self.netG.parameters(), max_norm=1.0)
+        # Very aggressive gradient clipping for high-resolution stability
+        torch.nn.utils.clip_grad_norm_(self.netG.parameters(), max_norm=0.1)
         if self.opt.netF == 'mlp_sample':
-            torch.nn.utils.clip_grad_norm_(self.netF.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(self.netF.parameters(), max_norm=0.1)
         self.optimizer_G.step()
         if self.opt.netF == 'mlp_sample':
             self.optimizer_F.step()
