@@ -547,7 +547,8 @@ class PatchSampleF(nn.Module):
             if len(self.gpu_ids) > 0:
                 mlp.cuda()
             setattr(self, 'mlp_%d' % mlp_id, mlp)
-        init_net(self, self.init_type, self.init_gain, self.gpu_ids)
+        # Use smaller init_gain for high-res stability (0.01 instead of 0.02)
+        init_net(self, self.init_type, 0.01, self.gpu_ids)
         self.mlp_init = True
 
     def forward(self, feats, num_patches=64, patch_ids=None):
@@ -580,6 +581,9 @@ class PatchSampleF(nn.Module):
                 patch_id = []
             
             if self.use_mlp:
+                # Normalize features BEFORE MLP to prevent explosion at high-res
+                x_sample = torch.nn.functional.normalize(x_sample, p=2, dim=1)
+                
                 mlp = getattr(self, 'mlp_%d' % feat_id)
                 x_sample = mlp(x_sample)
                 
